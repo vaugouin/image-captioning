@@ -75,6 +75,12 @@ language carries a title or text overlay, which a podcast does not want. Caption
 are in English; the plot comes from English Wikipedia, or from the French page's
 synopsis when the English one has none.
 
+The film context is tunable: `--max-cast` (cast lines, default 25) and
+`--plot-chars` (Wikipedia plot cap, cut at a sentence end; default 0 = whole).
+Measured on 3 Criterion films, 60 stills (2026-10-25): `--max-cast 15 --plot-chars 2000`
+costs 0.213 cents/image in batch against 0.269 for the full context, with
+captions just as anchored (same characters and actors named).
+
 For a large set, pass `--movie-ids-file` (one id per line). The Criterion
 Collection list comes from
 [doc/sql/criterion-movie-ids.sql](doc/sql/criterion-movie-ids.sql) (a plain

@@ -86,7 +86,8 @@ def _movie_image_path(pathnas: Path, lngmovie: int, strimagepath: str, strsize: 
 # ---------------------------------------------------------------------------
 
 def f_fetch_movie_context(strapibase: str, strkeyname: str, strapikey: str,
-                          lngmovie: int, lngmaxchars: int) -> str | None:
+                          lngmovie: int, lngmaxchars: int,
+                          lngmaxcast: int = 25, lngplotchars: int = 0) -> str | None:
     """Fetch GET {api}/movies/{id} and return a curated text block, or None.
 
     The raw JSON is ~150 KB and front-loads technical fields: a blind trim
@@ -114,7 +115,12 @@ def f_fetch_movie_context(strapibase: str, strkeyname: str, strapikey: str,
             tplplot = _find_plot(dctfr.get("wikipedia_content"), PLOT_TITLES_FR, "Wikipedia, French")
         except (urllib.error.URLError, TimeoutError, ValueError) as exc:
             print(f"  ! French Wikipedia fetch failed for movie {lngmovie}: {exc}")
-    strtext = _compose_context(dctmovie, tplplot)
+    if tplplot and lngplotchars and len(tplplot[1]) > lngplotchars:
+        # Cut at the last sentence end before the cap, so the plot stays readable.
+        strcut = tplplot[1][:lngplotchars]
+        lngdot = strcut.rfind(". ")
+        tplplot = (tplplot[0], strcut[: lngdot + 1] if lngdot > lngplotchars // 2 else strcut)
+    strtext = _compose_context(dctmovie, tplplot, lngmaxcast)
     if len(strtext) > lngmaxchars:
         strtext = strtext[:lngmaxchars] + "\n... [truncated]"
     return strtext
@@ -423,7 +429,7 @@ def _resolve_context(args, dctcontext: dict, lngmovie: int) -> str | None:
         dctcontext[lngmovie] = (
             None if args.dry_run and not args.api_base
             else f_fetch_movie_context(args.api_base, args.api_key_name, args.api_key,
-                                       lngmovie, args.context_chars)
+                                       lngmovie, args.context_chars, args.max_cast, args.plot_chars)
         )
     return dctcontext[lngmovie]
 
@@ -622,7 +628,8 @@ def f_run(args) -> int:
                 dctcontext[lngmovie] = (
                     None if args.dry_run and not args.api_base
                     else f_fetch_movie_context(args.api_base, args.api_key_name, args.api_key,
-                                               lngmovie, args.context_chars)
+                                               lngmovie, args.context_chars, args.max_cast,
+                                               args.plot_chars)
                 )
             strcontext = dctcontext[lngmovie]
             if strcontext is None and not args.allow_ungrounded:
@@ -697,6 +704,8 @@ def main() -> int:
     p.add_argument("--max-dim", type=int, default=1024, help="downscale long edge to this many px")
     p.add_argument("--max-tokens", type=int, default=400)
     p.add_argument("--context-chars", type=int, default=8000, help="trim the film context block to this many chars")
+    p.add_argument("--max-cast", type=int, default=25, help="cast lines (actor as character) in the context")
+    p.add_argument("--plot-chars", type=int, default=0, help="cap the Wikipedia plot to this many chars (0 = whole)")
     p.add_argument("--state", default=os.environ.get("STATE_DB", "./state.sqlite"))
     p.add_argument("--out-sql", default=os.environ.get("OUT_SQL", "./captions.sql"))
     p.add_argument("--limit", type=int, default=0, help="cap the number of backdrops (smoke test)")
