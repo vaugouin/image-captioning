@@ -85,7 +85,7 @@ directly: it emits `captions.sql`, which Philippe loads on the VPS.
 - **Timeline stage** (`timeline_captions.py`, 2026-10-25): one text request per
   film places its captions on the film's timeline (JSON schema output), writes
   `timeline.sql` (UPDATEs on the `TIMELINE_*` columns from
-  `doc/sql/alter-001-timeline.sql`). Read by tmdb-front `movie-captions.php`.
+  `doc/sql/archive/alter-001-timeline.sql`, applied 2026-10-25). Read by tmdb-front `movie-captions.php`.
   Same guardrail as captions: it orders a gallery, it never dates a scene.
 - Run with the repo `.venv`: the global Python's `anthropic` 0.72 rejects
   `output_config` (TypeError before any request, so nothing billed).
@@ -114,7 +114,7 @@ Avoid editor/terminal operations that rewrite files with mojibake.
 ---
 
 **Last Updated**: 2026-10-25
-**Current Version**: 0.1.2
+**Current Version**: 0.1.3
 
 ## Backlog (Nestor second-brain)
 

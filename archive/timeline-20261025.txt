@@ -1,0 +1,3 @@
+-- timeline.sql
+-- run on vaugouindb (container damp-vaugouin-com-mariadb-1) at 2026-10-25 21:01:14 +0100
+--

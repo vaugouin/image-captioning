@@ -98,15 +98,21 @@ text request per film holding the context (runtime, plot, cast) and all of the
 film's captions, answered as JSON (schema-enforced): a start-end interval in
 minutes, or "not placed" for promotional art and composites. Placed stills get a
 chronological rank. Batch by default; a film is redone only when its caption
-count changed. It writes `timeline.sql` (UPDATEs), loaded after the columns exist:
+count changed. It writes `timeline.sql` (UPDATEs). The `TIMELINE_*` columns
+exist since 2026-10-25 ([doc/sql/archive/alter-001-timeline.sql](doc/sql/archive/alter-001-timeline.sql));
+each new lot loads captions first, then their timeline:
 
 ```bash
 cd ~/docker/image-captioning
 git pull
-~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/doc/sql/alter-001-timeline.sql   # once
 ~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/captions.sql
 ~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/timeline.sql
 ```
+
+Once a lot is loaded, `captions.sql`, `timeline.sql` and their dated results go
+to `archive/` (rule archive.md): the scripts append to these files, so an
+archived pair means the next run starts empty and the next load carries only
+the new rows. The first lot (8 corpus films, 342 captions) is in `archive/`.
 
 Measured: ~$0.03 per film in sync (A Fistful of Dollars, 61 stills), half in batch.
 The interval width carries the model's uncertainty; it orders a gallery, it does
