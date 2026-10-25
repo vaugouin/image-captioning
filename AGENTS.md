@@ -105,7 +105,7 @@ Avoid editor/terminal operations that rewrite files with mojibake.
 ---
 
 **Last Updated**: 2026-10-25
-**Current Version**: 0.1.0
+**Current Version**: 0.1.1
 
 ## Backlog (Nestor second-brain)
 

@@ -34,10 +34,11 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 copy .env.example .env
-notepad .env   # ANTHROPIC_API_KEY, API_BASE, NAS_ROOT
-# the film context needs the T_WC_TMDB_MOVIE_IMAGE.csv export:
-copy ..\download-images\csv\T_WC_TMDB_MOVIE_IMAGE.csv .\csv\
+notepad .env   # ANTHROPIC_API_KEY, TEXT2SQL_* (as in voice-agent), NAS_ROOT, CSV_DIR
 ```
+
+`CSV_DIR` points at the folder holding the `T_WC_TMDB_MOVIE_IMAGE.csv` export
+(the NAS copy of the VPS `download-images/csv`); nothing to copy.
 
 Use an API key from **Philippe's Individual Org** so the calls draw on the Max
 plan's monthly API credit (rule `credits-api-anthropic`).
@@ -54,6 +55,20 @@ python caption_images.py --movie-ids 391 --limit 5 --dry-run
 # one film, 5 real captions, to eyeball quality:
 python caption_images.py --movie-ids 391 --limit 5
 ```
+
+Only **textless** backdrops are captioned (empty `LANG`): a backdrop tagged with a
+language carries a title or text overlay, which a podcast does not want. Captions
+are in English; the plot comes from English Wikipedia, or from the French page's
+synopsis when the English one has none.
+
+For a large set, pass `--movie-ids-file` (one id per line). The Criterion
+Collection list comes from
+[doc/sql/criterion-movie-ids.sql](doc/sql/criterion-movie-ids.sql) (a plain
+SELECT; its dated result file next to it is accepted as is, header included).
+
+The film list is `--movie-ids` (TMDb ids). It is required: without it the script
+refuses to run, since an empty list would mean every backdrop in the CSV (1.6M,
+thousands of dollars). That whole-CSV pass needs an explicit `--all-movies`.
 
 Resumable: a rerun skips rows already captioned for the same model (SQLite
 `state.sqlite`). The caption rows accumulate in `captions.sql`; hand that to the

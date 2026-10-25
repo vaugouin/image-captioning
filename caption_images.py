@@ -5,7 +5,7 @@ each backdrop listed in the exported T_WC_TMDB_MOVIE_IMAGE.csv, it:
 
   1. resolves the image on the NAS (same sharded layout as download-images),
   2. fetches the film's context once from the fastapi-text2sql API
-     (GET {API_BASE}/movies/{id}) and caches it, so every backdrop of the
+     (GET {TEXT2SQL_BASE_URL}/movies/{id}) and caches it, so every backdrop of the
      same film reuses one prompt-cached prefix,
   3. downsizes the image locally (Pillow) to keep vision token cost down,
   4. asks Claude for one anchored caption ("the final duel between the Yojimbo
@@ -57,6 +57,7 @@ SYSTEM_PROMPT = (
     "lets you identify them; describe the setting, the action and the mood. "
     "Do not open with 'This image shows' or 'The image'. If you cannot tell which "
     "scene it is, describe the visible content plainly and do NOT invent plot. "
+    "Always write in English, even when parts of the context are in French. "
     "Output only the sentence, nothing else."
 )
 
@@ -83,24 +84,102 @@ def _movie_image_path(pathnas: Path, lngmovie: int, strimagepath: str, strsize: 
 # Film context from the fastapi-text2sql API
 # ---------------------------------------------------------------------------
 
-def f_fetch_movie_context(strapibase: str, lngmovie: int, lngmaxchars: int) -> str | None:
-    """Fetch GET {api}/movies/{id} and return a trimmed text block, or None.
+def f_fetch_movie_context(strapibase: str, strkeyname: str, strapikey: str,
+                          lngmovie: int, lngmaxchars: int) -> str | None:
+    """Fetch GET {api}/movies/{id} and return a curated text block, or None.
 
-    Schema-agnostic on purpose: the whole JSON (pretty-printed, trimmed) is the
-    context. Refine later if a leaner block proves enough.
+    The raw JSON is ~150 KB and front-loads technical fields: a blind trim
+    would drop the cast and the plot, the two things a caption anchors on. So
+    the block is composed from the fields that name scenes and people (see
+    _compose_context). The API rejects unauthenticated calls (401), so the
+    auth header is sent when set.
+
+    The plot comes from English Wikipedia; when that page has no plot section
+    (often the case for a French film), the French page's synopsis is used.
     """
     strurl = f"{strapibase.rstrip('/')}/movies/{lngmovie}"
+    dctheaders = {"Accept": "application/json"}
+    if strapikey:
+        dctheaders[strkeyname] = strapikey
     try:
-        req = urllib.request.Request(strurl, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            dctmovie = json.loads(resp.read().decode("utf-8"))
+        dctmovie = _get_json(strurl, dctheaders)
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         print(f"  ! context fetch failed for movie {lngmovie}: {exc}")
         return None
-    strtext = json.dumps(dctmovie, ensure_ascii=False, indent=1)
+    tplplot = _find_plot(dctmovie.get("wikipedia_content"), PLOT_TITLES_EN, "Wikipedia, English")
+    if tplplot is None:
+        try:
+            dctfr = _get_json(f"{strurl}?ui_language=fr", dctheaders)
+            tplplot = _find_plot(dctfr.get("wikipedia_content"), PLOT_TITLES_FR, "Wikipedia, French")
+        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+            print(f"  ! French Wikipedia fetch failed for movie {lngmovie}: {exc}")
+    strtext = _compose_context(dctmovie, tplplot)
     if len(strtext) > lngmaxchars:
         strtext = strtext[:lngmaxchars] + "\n... [truncated]"
     return strtext
+
+
+PLOT_TITLES_EN = ("plot", "synopsis", "story", "premise")
+PLOT_TITLES_FR = ("synopsis", "résumé", "intrigue", "histoire", "scénario")
+
+
+def _get_json(strurl: str, dctheaders: dict) -> dict:
+    req = urllib.request.Request(strurl, headers=dctheaders)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _find_plot(arrsections, tpltitles: tuple, strlabel: str) -> tuple[str, str] | None:
+    """Return (label, text) of the first non-empty section whose title starts with a plot word."""
+    for dctsection in arrsections or []:
+        strsect = (dctsection.get("title") or "").strip().lower()
+        strcontent = (dctsection.get("content") or "").strip()
+        if strsect.startswith(tpltitles) and strcontent:
+            return strlabel, strcontent
+    return None
+
+
+def _compose_context(dctmovie: dict, tplplot: tuple[str, str] | None,
+                     lngmaxcast: int = 25) -> str:
+    """Build the FILM CONTEXT block: identity, people, story, places.
+
+    Order matters for the trim: the Wikipedia plot goes last, so a long plot
+    is cut before the cast is.
+    """
+    arrlines = []
+    strtitle = dctmovie.get("MOVIE_TITLE") or ""
+    strorig = dctmovie.get("ORIGINAL_TITLE") or ""
+    stryear = str(dctmovie.get("RELEASE_YEAR") or "")
+    arrlines.append(f"Title: {strtitle}"
+                    + (f" (original title: {strorig})" if strorig and strorig != strtitle else "")
+                    + (f", {stryear}" if stryear else ""))
+    arrdirectors = [c["PERSON_NAME"] for c in dctmovie.get("crew") or []
+                    if "Director" in (c.get("CREW_JOB") or "").split(", ")]
+    if arrdirectors:
+        arrlines.append("Directed by: " + ", ".join(arrdirectors))
+    arrgenres = [g.get("GENRE_NAME") or g.get("NAME") or "" for g in dctmovie.get("genres") or []
+                 if isinstance(g, dict)]
+    if any(arrgenres):
+        arrlines.append("Genres: " + ", ".join(s for s in arrgenres if s))
+    if dctmovie.get("TAGLINE"):
+        arrlines.append(f"Tagline: {dctmovie['TAGLINE']}")
+    if dctmovie.get("OVERVIEW"):
+        arrlines.append(f"Overview: {dctmovie['OVERVIEW']}")
+    arrcast = sorted(dctmovie.get("cast") or [], key=lambda c: c.get("DISPLAY_ORDER") or 9999)
+    arrcastlines = [f"- {c['PERSON_NAME']} as {c['CAST_CHARACTER']}" if c.get("CAST_CHARACTER")
+                    else f"- {c['PERSON_NAME']}" for c in arrcast[:lngmaxcast]]
+    if arrcastlines:
+        arrlines.append("Cast (actor as character):\n" + "\n".join(arrcastlines))
+    arrbased = [f"{b['SOURCE_WORK_NAME']} ({b.get('SOURCE_WORK_YEAR') or '?'})"
+                for b in dctmovie.get("based_on") or [] if b.get("SOURCE_WORK_NAME")]
+    if arrbased:
+        arrlines.append("Based on: " + ", ".join(arrbased))
+    arrplaces = [l["LOCATION_NAME"] for l in dctmovie.get("locations") or [] if l.get("LOCATION_NAME")]
+    if arrplaces:
+        arrlines.append("Locations: " + ", ".join(arrplaces))
+    if tplplot:
+        arrlines.append(f"Plot ({tplplot[0]}):\n{tplplot[1]}")
+    return "\n".join(arrlines)
 
 
 # ---------------------------------------------------------------------------
@@ -256,10 +335,16 @@ def _sql_insert(lngrow: int, lngentity: int, strpath: str, strcaption: str, strm
 # ---------------------------------------------------------------------------
 
 def _iter_backdrops(pathcsv: Path, setmovies: set[int]):
-    """Yield (id_row, id_movie, image_path) for backdrops of the wanted films."""
+    """Yield (id_row, id_movie, image_path) for textless backdrops of the wanted films.
+
+    A backdrop with a LANG carries a title or text overlay (TMDb tags textless
+    images with no language); a podcast wants clean stills, so those are skipped.
+    """
     with pathcsv.open("r", encoding="utf-8", newline="") as fp:
         for row in csv.DictReader(fp):
             if row.get("TYPE_IMAGE") != "backdrop" or not row.get("IMAGE_PATH"):
+                continue
+            if (row.get("LANG") or "").strip():
                 continue
             lngmovie = int(row["ID_MOVIE"])
             if setmovies and lngmovie not in setmovies:
@@ -276,6 +361,13 @@ def f_run(args) -> int:
     if not pathcsv.exists():
         sys.exit(f"missing CSV: {pathcsv} (copy it from download-images/csv/)")
     setmovies = {int(s) for s in args.movie_ids.split(",") if s.strip()} if args.movie_ids else set()
+    if args.movie_ids_file:
+        # One id per line; any non-numeric line (a result header, a gate banner) is ignored.
+        for strline in Path(args.movie_ids_file).read_text(encoding="utf-8").splitlines():
+            if strline.strip().isdigit():
+                setmovies.add(int(strline.strip()))
+    if not setmovies and not args.all_movies:
+        sys.exit("no --movie-ids / --movie-ids-file given; pass --all-movies to caption the whole CSV on purpose")
     pathnas = Path(args.nas_root)
 
     arrbackdrops = list(_iter_backdrops(pathcsv, setmovies))
@@ -284,8 +376,9 @@ def f_run(args) -> int:
     print(f"-> {len(arrbackdrops)} backdrops for {len(setmovies) or 'all'} film(s), model {args.model}")
 
     client = None if args.dry_run else anthropic.Anthropic()
-    state = State(Path(args.state))
-    pathsql = Path(args.out_sql)
+    # A dry run touches nothing on disk: in-memory state, SQL to the null device.
+    state = State(Path(":memory:") if args.dry_run else Path(args.state))
+    pathsql = Path(os.devnull) if args.dry_run else Path(args.out_sql)
     fpsql = pathsql.open("a", encoding="utf-8")
 
     dctcontext: dict[int, str | None] = {}
@@ -308,7 +401,8 @@ def f_run(args) -> int:
             if lngmovie not in dctcontext:
                 dctcontext[lngmovie] = (
                     None if args.dry_run and not args.api_base
-                    else f_fetch_movie_context(args.api_base, lngmovie, args.context_chars)
+                    else f_fetch_movie_context(args.api_base, args.api_key_name, args.api_key,
+                                               lngmovie, args.context_chars)
                 )
             strcontext = dctcontext[lngmovie]
             if strcontext is None and not args.allow_ungrounded:
@@ -371,14 +465,22 @@ def main() -> int:
     p.add_argument("--nas-root", default=os.environ.get("NAS_ROOT", r"T:\prive\TMDb-images"))
     p.add_argument("--size", default=os.environ.get("NAS_SIZE", "original"),
                    help="NAS size folder to read (default: original, the only one downloaded)")
-    p.add_argument("--api-base", default=os.environ.get("API_BASE", ""),
+    p.add_argument("--api-base", default=os.environ.get("TEXT2SQL_BASE_URL", ""),
                    help="fastapi-text2sql base URL for GET /movies/{id}")
-    p.add_argument("--movie-ids", default="", help="comma-separated TMDb movie ids; empty = all in CSV")
+    p.add_argument("--api-key-name", default=os.environ.get("TEXT2SQL_API_KEY_NAME", "X-API-Key"),
+                   help="auth header name expected by fastapi-text2sql")
+    p.add_argument("--api-key", default=os.environ.get("TEXT2SQL_API_KEY_VALUE", ""),
+                   help="auth header value for fastapi-text2sql")
+    p.add_argument("--movie-ids", default="", help="comma-separated TMDb movie ids (required unless --all-movies)")
+    p.add_argument("--movie-ids-file", default="",
+                   help="file with one TMDb movie id per line (e.g. a SELECT result), merged with --movie-ids")
+    p.add_argument("--all-movies", action="store_true",
+                   help="caption every backdrop in the CSV (1.6M rows, thousands of dollars): explicit opt-in")
     p.add_argument("--model", default=os.environ.get("CAPTION_MODEL", "claude-sonnet-5-5"))
     p.add_argument("--effort", default="low", choices=["low", "medium", "high", "xhigh", "max"])
     p.add_argument("--max-dim", type=int, default=1024, help="downscale long edge to this many px")
     p.add_argument("--max-tokens", type=int, default=400)
-    p.add_argument("--context-chars", type=int, default=6000, help="trim the film JSON to this many chars")
+    p.add_argument("--context-chars", type=int, default=8000, help="trim the film context block to this many chars")
     p.add_argument("--state", default=os.environ.get("STATE_DB", "./state.sqlite"))
     p.add_argument("--out-sql", default=os.environ.get("OUT_SQL", "./captions.sql"))
     p.add_argument("--limit", type=int, default=0, help="cap the number of backdrops (smoke test)")
