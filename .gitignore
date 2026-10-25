@@ -8,6 +8,7 @@ state.sqlite
 state.sqlite-shm
 state.sqlite-wal
 csv/
+*.log
 # NOTE: captions.sql is NOT ignored. It is the operation artefact loaded on the
 # VPS via voie 2 (git pull + runsqlvaugouindb.sh), so it must travel with the
 # repo. Commit it after a clean run, then archive it once loaded (rule archive.md).

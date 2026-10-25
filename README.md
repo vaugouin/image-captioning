@@ -45,16 +45,30 @@ plan's monthly API credit (rule `credits-api-anthropic`).
 
 ## Run
 
+Use the repo venv (`.venv\Scripts\python`): the global Python may carry an
+`anthropic` SDK too old for `output_config` (0.72 failed; the venv has 2.x).
+
+**Batch is the default mode** (Message Batches API, half price, results within
+24 h, usually within the hour). It runs in two steps:
+
 ```powershell
-# the 8 films of the APP-IDEAS-010 corpus (401 backdrops, < $1 in Sonnet)
+# 1. submit the pending backdrops (grouped by film, split into <= 200 MB batches)
 python caption_images.py --movie-ids 539,391,346,11878,75233,966,11252,2593
 
-# smoke test first, no API call:
-python caption_images.py --movie-ids 391 --limit 5 --dry-run
+# 2. collect the results into state.sqlite and captions.sql (rerun until all ended,
+#    or --wait to poll every 60 s)
+python caption_images.py --collect --wait
 
-# one film, 5 real captions, to eyeball quality:
-python caption_images.py --movie-ids 391 --limit 5
+# count what would be submitted, no API call, nothing written:
+python caption_images.py --movie-ids-file doc/sql/criterion-movie-ids-20261025.txt --dry-run
+
+# full-price sync mode, immediate captions, for a quick look at 5 images:
+python caption_images.py --movie-ids 391 --limit 5 --sync
 ```
+
+A batch request uses the 1-hour cache TTL on the film context: batch requests
+run concurrently and in any order, so the 5-minute default would expire
+between two backdrops of the same film. Cache hits inside a batch are best-effort.
 
 Only **textless** backdrops are captioned (empty `LANG`): a backdrop tagged with a
 language carries a title or text overlay, which a podcast does not want. Captions
@@ -70,9 +84,33 @@ The film list is `--movie-ids` (TMDb ids). It is required: without it the script
 refuses to run, since an empty list would mean every backdrop in the CSV (1.6M,
 thousands of dollars). That whole-CSV pass needs an explicit `--all-movies`.
 
-Resumable: a rerun skips rows already captioned for the same model (SQLite
-`state.sqlite`). The caption rows accumulate in `captions.sql`; hand that to the
-VPS when the run looks good.
+Incremental: a rerun skips rows already captioned (or already in a submitted
+batch) for the same model, tracked in SQLite `state.sqlite`. Rows missing on the
+NAS, without context, or failed in a batch are retried by the next run, so after
+`download-images` fetches new images, the same command only pays for those. The
+caption rows accumulate in `captions.sql`; hand that to the VPS when the run
+looks good.
+
+## Timeline (second stage)
+
+`timeline_captions.py` places each captioned still on its film's timeline: one
+text request per film holding the context (runtime, plot, cast) and all of the
+film's captions, answered as JSON (schema-enforced): a start-end interval in
+minutes, or "not placed" for promotional art and composites. Placed stills get a
+chronological rank. Batch by default; a film is redone only when its caption
+count changed. It writes `timeline.sql` (UPDATEs), loaded after the columns exist:
+
+```bash
+cd ~/docker/image-captioning
+git pull
+~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/doc/sql/alter-001-timeline.sql   # once
+~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/captions.sql
+~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/timeline.sql
+```
+
+Measured: ~$0.03 per film in sync (A Fistful of Dollars, 61 stills), half in batch.
+The interval width carries the model's uncertainty; it orders a gallery, it does
+not date a scene.
 
 ## Model and cost
 
@@ -85,8 +123,8 @@ VPS when the run looks good.
 Levers in the code: the per-film context block is **prompt-cached** (one cached
 prefix per film), the image is **downsized locally** to `--max-dim` px (originals
 on the NAS reach 3840×2160, ~3× the vision tokens), and `--effort low` (describing
-a scene is not a reasoning task). The script prints a measured cost estimate per
-run. For a full-TMDb pass, move to the **Batch API** (half price) and Haiku.
+a scene is not a reasoning task), and the **Batch API** by default (half price).
+The script prints a measured cost estimate per run (sync) or per collection (batch).
 
 ## Backlog
 

@@ -78,8 +78,17 @@ directly: it emits `captions.sql`, which Philippe loads on the VPS.
   `ANTHROPIC_API_KEY` is from that org; have it checked before counting on the credit.
 - **Every run spends real money.** Smoke-test with `--dry-run`, then `--limit`
   on one film, before a full pass. The script prints a measured cost estimate.
-- Scale lever for a full-TMDb pass: the **Batch API** (half price) with
-  `claude-haiku-5-5`. Not yet implemented; sync is enough for episode corpora.
+- **Batch API is the default mode** (Philippe, 2026-10-25): a run submits Message
+  Batches, `--collect` fetches them; `--sync` is the full-price opt-in. Rows in a
+  submitted batch are `status='submitted'` with their `batch_id` in state; never
+  resubmit them by hand, or the same images are paid twice.
+- **Timeline stage** (`timeline_captions.py`, 2026-10-25): one text request per
+  film places its captions on the film's timeline (JSON schema output), writes
+  `timeline.sql` (UPDATEs on the `TIMELINE_*` columns from
+  `doc/sql/alter-001-timeline.sql`). Read by tmdb-front `movie-captions.php`.
+  Same guardrail as captions: it orders a gallery, it never dates a scene.
+- Run with the repo `.venv`: the global Python's `anthropic` 0.72 rejects
+  `output_config` (TypeError before any request, so nothing billed).
 
 ---
 
@@ -105,7 +114,7 @@ Avoid editor/terminal operations that rewrite files with mojibake.
 ---
 
 **Last Updated**: 2026-10-25
-**Current Version**: 0.1.1
+**Current Version**: 0.1.2
 
 ## Backlog (Nestor second-brain)
 

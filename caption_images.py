@@ -29,6 +29,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -157,6 +158,8 @@ def _compose_context(dctmovie: dict, tplplot: tuple[str, str] | None,
                     if "Director" in (c.get("CREW_JOB") or "").split(", ")]
     if arrdirectors:
         arrlines.append("Directed by: " + ", ".join(arrdirectors))
+    if dctmovie.get("RUNTIME"):
+        arrlines.append(f"Runtime: {dctmovie['RUNTIME']} min")
     arrgenres = [g.get("GENRE_NAME") or g.get("NAME") or "" for g in dctmovie.get("genres") or []
                  if isinstance(g, dict)]
     if any(arrgenres):
@@ -217,6 +220,57 @@ class Caption:
     cache_write_tokens: int
 
 
+def _build_params(
+    strmodel: str,
+    streffort: str,
+    strcontext: str,
+    strimgdata: str,
+    strmedia: str,
+    lngmaxtokens: int,
+    strttl: str = "5m",
+) -> dict:
+    """Messages API params for one image, shared by the sync call and the batch.
+
+    The film-context block carries the cache breakpoint, so all backdrops of a
+    film share one cached prefix. A batch runs its requests concurrently and
+    in any order, so it uses the 1-hour TTL to keep that prefix alive.
+    """
+    dctcache = {"type": "ephemeral"} if strttl == "5m" else {"type": "ephemeral", "ttl": strttl}
+    return {
+        "model": strmodel,
+        "max_tokens": lngmaxtokens,
+        "output_config": {"effort": streffort},
+        "system": SYSTEM_PROMPT,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"FILM CONTEXT:\n{strcontext}",
+                    "cache_control": dctcache,
+                },
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": strmedia, "data": strimgdata},
+                },
+                {"type": "text", "text": "Caption this backdrop."},
+            ],
+        }],
+    }
+
+
+def _to_caption(message) -> Caption:
+    strcaption = next((b.text for b in message.content if b.type == "text"), "").strip()
+    usage = message.usage
+    return Caption(
+        text=strcaption,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
+    )
+
+
 def f_caption_one(
     client: anthropic.Anthropic,
     strmodel: str,
@@ -226,37 +280,10 @@ def f_caption_one(
     strmedia: str,
     lngmaxtokens: int,
 ) -> Caption:
-    """One anchored caption for one image. The film-context block is cached."""
-    response = client.messages.create(
-        model=strmodel,
-        max_tokens=lngmaxtokens,
-        output_config={"effort": streffort},
-        system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"FILM CONTEXT:\n{strcontext}",
-                    "cache_control": {"type": "ephemeral"},
-                },
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": strmedia, "data": strimgdata},
-                },
-                {"type": "text", "text": "Caption this backdrop."},
-            ],
-        }],
-    )
-    strcaption = next((b.text for b in response.content if b.type == "text"), "").strip()
-    usage = response.usage
-    return Caption(
-        text=strcaption,
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
-        cache_write_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
-    )
+    """One anchored caption for one image (sync call). The film-context block is cached."""
+    return _to_caption(client.messages.create(
+        **_build_params(strmodel, streffort, strcontext, strimgdata, strmedia, lngmaxtokens)
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -283,30 +310,54 @@ class State:
             )
             """
         )
+        # batch_id: set while a row sits in a submitted Message Batch (status 'submitted').
+        arrcols = [r[1] for r in self._conn.execute("PRAGMA table_info(caption_state)")]
+        if "batch_id" not in arrcols:
+            self._conn.execute("ALTER TABLE caption_state ADD COLUMN batch_id TEXT")
         self._conn.commit()
 
-    def done(self, strtable: str, lngrow: int, strmodel: str) -> bool:
+    def status(self, strtable: str, lngrow: int, strmodel: str) -> str | None:
         cur = self._conn.execute(
-            "SELECT 1 FROM caption_state WHERE table_name=? AND id_row=? AND model=? AND status='done'",
+            "SELECT status FROM caption_state WHERE table_name=? AND id_row=? AND model=?",
             (strtable, lngrow, strmodel),
         )
-        return cur.fetchone() is not None
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def done(self, strtable: str, lngrow: int, strmodel: str) -> bool:
+        return self.status(strtable, lngrow, strmodel) == "done"
 
     def record(
         self, strtable: str, lngrow: int, lngentity: int, strpath: str,
-        strmodel: str, strcaption: str | None, strstatus: str,
+        strmodel: str, strcaption: str | None, strstatus: str, strbatch: str | None = None,
     ) -> None:
         self._conn.execute(
             """
             INSERT INTO caption_state
-                (table_name, id_row, id_entity, image_path, model, caption, status, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                (table_name, id_row, id_entity, image_path, model, caption, status, batch_id, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(table_name, id_row, model) DO UPDATE SET
-                caption=excluded.caption, status=excluded.status, finished_at=CURRENT_TIMESTAMP
+                caption=excluded.caption, status=excluded.status, batch_id=excluded.batch_id,
+                finished_at=CURRENT_TIMESTAMP
             """,
-            (strtable, lngrow, lngentity, strpath, strmodel, strcaption, strstatus),
+            (strtable, lngrow, lngentity, strpath, strmodel, strcaption, strstatus, strbatch),
         )
         self._conn.commit()
+
+    def submitted_batches(self) -> list[str]:
+        cur = self._conn.execute(
+            "SELECT DISTINCT batch_id FROM caption_state WHERE status='submitted' AND batch_id IS NOT NULL"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+    def row_for(self, strbatch: str, lngrow: int) -> tuple[int, str, str] | None:
+        """(id_entity, image_path, model) of a row submitted in that batch."""
+        cur = self._conn.execute(
+            "SELECT id_entity, image_path, model FROM caption_state "
+            "WHERE batch_id=? AND id_row=? AND table_name='movie'",
+            (strbatch, lngrow),
+        )
+        return cur.fetchone()
 
     def close(self) -> None:
         self._conn.close()
@@ -356,25 +407,194 @@ def _iter_backdrops(pathcsv: Path, setmovies: set[int]):
 # Driver
 # ---------------------------------------------------------------------------
 
+def _cost(strmodel: str, lngin: int, lngcacheread: int, lngcachewrite: int, lngout: int,
+          dblwritemult: float, dbldiscount: float) -> float:
+    """Estimated USD: cache writes at dblwritemult x input (1.25 for 5 min, 2 for 1 h),
+    cache reads at 0.1 x input, everything times dbldiscount (0.5 for the Batch API)."""
+    dblin, dblout = PRICES.get(strmodel, (0.0, 0.0))
+    return dbldiscount * (
+        lngin * dblin + lngcachewrite * dblin * dblwritemult
+        + lngcacheread * dblin * 0.1 + lngout * dblout
+    ) / 1_000_000
+
+
+def _resolve_context(args, dctcontext: dict, lngmovie: int) -> str | None:
+    if lngmovie not in dctcontext:
+        dctcontext[lngmovie] = (
+            None if args.dry_run and not args.api_base
+            else f_fetch_movie_context(args.api_base, args.api_key_name, args.api_key,
+                                       lngmovie, args.context_chars)
+        )
+    return dctcontext[lngmovie]
+
+
+def f_submit_batches(args, state: "State", arrbackdrops: list, pathnas: Path) -> int:
+    """Submit pending backdrops as Message Batches (half price), grouped by film.
+
+    Each batch stays under --batch-max-mb (the API caps a batch at 256 MB; a
+    base64 backdrop is ~130 KB) and --batch-size requests. Submitted rows are
+    marked 'submitted' with their batch id; --collect picks the results up.
+    """
+    arrpending = [t for t in arrbackdrops
+                  if state.status("movie", t[0], args.model) not in ("done", "submitted")]
+    arrpending.sort(key=lambda t: (t[1], t[0]))  # by film, so a batch shares cached prefixes
+    if args.limit:
+        arrpending = arrpending[: args.limit]
+    print(f"-> {len(arrpending)} backdrops pending for batch submission")
+
+    client = None if args.dry_run else anthropic.Anthropic()
+    lngmaxbytes = args.batch_max_mb * 1_000_000
+    dctcontext: dict[int, str | None] = {}
+    arrreqs: list[dict] = []
+    arrrows: list[tuple[int, int, str]] = []
+    lngbytes = lngsubmitted = lngfail = lngbatches = 0
+
+    def _flush() -> None:
+        nonlocal lngsubmitted, lngbatches
+        if args.dry_run:
+            print(f"  [dry-run] would submit a batch of {len(arrreqs)} requests ({lngbytes / 1e6:.0f} MB)")
+        else:
+            batch = client.messages.batches.create(requests=arrreqs)
+            for lngrow, lngmovie, strpath in arrrows:
+                state.record("movie", lngrow, lngmovie, strpath, args.model, None, "submitted", batch.id)
+            print(f"  submitted batch {batch.id}: {len(arrreqs)} requests ({lngbytes / 1e6:.0f} MB)")
+        lngsubmitted += len(arrreqs)
+        lngbatches += 1
+
+    for lngrow, lngmovie, strpath in arrpending:
+        pathimg = _movie_image_path(pathnas, lngmovie, strpath, args.size)
+        if not pathimg.exists():
+            print(f"  ! missing on NAS: {pathimg}")
+            if not args.dry_run:
+                state.record("movie", lngrow, lngmovie, strpath, args.model, None, "missing_file")
+            lngfail += 1
+            continue
+        strcontext = _resolve_context(args, dctcontext, lngmovie)
+        if strcontext is None and not args.allow_ungrounded:
+            print(f"  ! no context for movie {lngmovie}; skipping (use --allow-ungrounded to force)")
+            if not args.dry_run:
+                state.record("movie", lngrow, lngmovie, strpath, args.model, None, "no_context")
+            lngfail += 1
+            continue
+        strdata, strmedia = _reduce_image(pathimg, args.max_dim)
+        dctreq = {
+            "custom_id": f"movie-{lngrow}",
+            "params": _build_params(args.model, args.effort, strcontext or "(no context available)",
+                                    strdata, strmedia, args.max_tokens, strttl="1h"),
+        }
+        lngsize = len(json.dumps(dctreq))
+        if arrreqs and (lngbytes + lngsize > lngmaxbytes or len(arrreqs) >= args.batch_size):
+            _flush()
+            arrreqs, arrrows, lngbytes = [], [], 0
+        arrreqs.append(dctreq)
+        arrrows.append((lngrow, lngmovie, strpath))
+        lngbytes += lngsize
+    if arrreqs:
+        _flush()
+
+    print(f"\nsummary: {lngsubmitted} submitted in {lngbatches} batch(es), {lngfail} skipped (missing / no context)")
+    if lngsubmitted and not args.dry_run:
+        print("results: run again with --collect (add --wait to poll until every batch has ended)")
+    return 0
+
+
+def f_collect_batches(args) -> int:
+    """Fetch the results of submitted batches; write captions to state and SQL.
+
+    A failed, expired or canceled request goes back to 'error', so the next
+    submission retries it. With --wait, polls every 60 s until no
+    submitted batch is left.
+    """
+    client = anthropic.Anthropic()
+    state = State(Path(args.state))
+    pathsql = Path(args.out_sql)
+    fpsql = pathsql.open("a", encoding="utf-8")
+    lngdone = lngfail = 0
+    lngin = lngout = lngcacheread = lngcachewrite = 0
+    try:
+        while True:
+            lngopen = 0
+            for strbatch in state.submitted_batches():
+                batch = client.messages.batches.retrieve(strbatch)
+                if batch.processing_status != "ended":
+                    rc = batch.request_counts
+                    print(f"  batch {strbatch}: {batch.processing_status}, "
+                          f"{rc.processing} processing, {rc.succeeded} succeeded so far")
+                    lngopen += 1
+                    continue
+                for result in client.messages.batches.results(strbatch):
+                    lngrow = int(result.custom_id.split("-", 1)[1])
+                    tplrow = state.row_for(strbatch, lngrow)
+                    if tplrow is None:
+                        continue
+                    lngmovie, strpath, strmodel = tplrow
+                    if result.result.type == "succeeded":
+                        cap = _to_caption(result.result.message)
+                        if cap.text:
+                            state.record("movie", lngrow, lngmovie, strpath, strmodel, cap.text, "done", strbatch)
+                            fpsql.write(_sql_insert(lngrow, lngmovie, strpath, cap.text, strmodel) + "\n")
+                            lngin += cap.input_tokens
+                            lngout += cap.output_tokens
+                            lngcacheread += cap.cache_read_tokens
+                            lngcachewrite += cap.cache_write_tokens
+                            lngdone += 1
+                            continue
+                    print(f"  ! batch {strbatch} row {lngrow}: {result.result.type}")
+                    state.record("movie", lngrow, lngmovie, strpath, strmodel, None, "error", strbatch)
+                    lngfail += 1
+                fpsql.flush()
+                print(f"  batch {strbatch}: ended, collected")
+            if not args.wait or lngopen == 0:
+                break
+            print(f"  {lngopen} batch(es) still running; next check in 60 s")
+            time.sleep(60)
+    finally:
+        fpsql.close()
+        state.close()
+
+    print(f"\nsummary: {lngdone} captions collected, {lngfail} failed (resubmitted by the next submission)")
+    if lngdone:
+        dblcost = _cost(args.model, lngin, lngcacheread, lngcachewrite, lngout, 2.0, 0.5)
+        print(
+            f"tokens: in={lngin:,} cache_read={lngcacheread:,} cache_write={lngcachewrite:,} out={lngout:,}\n"
+            f"estimated cost (Batch API, 1 h cache): ${dblcost:.4f}  = {100 * dblcost / lngdone:.3f} cents/image\n"
+            f"SQL appended to {pathsql} -> load on the VPS (voie 2)"
+        )
+    return 1 if lngfail else 0
+
+
 def f_run(args) -> int:
+    if args.collect:
+        return f_collect_batches(args)
     pathcsv = Path(args.csv_dir) / "T_WC_TMDB_MOVIE_IMAGE.csv"
     if not pathcsv.exists():
         sys.exit(f"missing CSV: {pathcsv} (copy it from download-images/csv/)")
     setmovies = {int(s) for s in args.movie_ids.split(",") if s.strip()} if args.movie_ids else set()
     if args.movie_ids_file:
-        # One id per line; any non-numeric line (a result header, a gate banner) is ignored.
+        # One id per line, bare or as a mariadb table cell ("|  391 |"); any other
+        # line (header, borders, run banner) is ignored.
         for strline in Path(args.movie_ids_file).read_text(encoding="utf-8").splitlines():
-            if strline.strip().isdigit():
-                setmovies.add(int(strline.strip()))
+            strcell = strline.strip().strip("|").strip()
+            if strcell.isdigit():
+                setmovies.add(int(strcell))
     if not setmovies and not args.all_movies:
         sys.exit("no --movie-ids / --movie-ids-file given; pass --all-movies to caption the whole CSV on purpose")
     pathnas = Path(args.nas_root)
 
     arrbackdrops = list(_iter_backdrops(pathcsv, setmovies))
-    if args.limit:
-        arrbackdrops = arrbackdrops[: args.limit]
     print(f"-> {len(arrbackdrops)} backdrops for {len(setmovies) or 'all'} film(s), model {args.model}")
 
+    if not args.sync:
+        # Default: Message Batches. A dry run reads the real state (to count what
+        # is pending) but writes nothing.
+        state = State(Path(args.state))
+        try:
+            return f_submit_batches(args, state, arrbackdrops, pathnas)
+        finally:
+            state.close()
+
+    if args.limit:
+        arrbackdrops = arrbackdrops[: args.limit]
     client = None if args.dry_run else anthropic.Anthropic()
     # A dry run touches nothing on disk: in-memory state, SQL to the null device.
     state = State(Path(":memory:") if args.dry_run else Path(args.state))
@@ -444,15 +664,11 @@ def f_run(args) -> int:
 
     print(f"\nsummary: {lngdone} done, {lngskip} skipped, {lngfail} failed")
     if not args.dry_run and lngdone:
-        dblin, dblout = PRICES.get(args.model, (0.0, 0.0))
-        dblcost = (
-            (lngin + lngcachewrite) * dblin / 1_000_000
-            + lngcacheread * dblin * 0.1 / 1_000_000
-            + lngout * dblout / 1_000_000
-        )
+        dblcost = _cost(args.model, lngin, lngcacheread, lngcachewrite, lngout, 1.25, 1.0)
         print(
             f"tokens: in={lngin:,} cache_read={lngcacheread:,} cache_write={lngcachewrite:,} out={lngout:,}\n"
-            f"estimated cost (sync, this run): ${dblcost:.4f}  (Batch API would halve it)\n"
+            f"estimated cost (sync, this run): ${dblcost:.4f}  = {100 * dblcost / lngdone:.3f} cents/image"
+            "  (the default batch mode would halve it)\n"
             f"SQL written to {pathsql} -> load on the VPS (voie 2)"
         )
     return 1 if lngfail else 0
@@ -486,6 +702,14 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=0, help="cap the number of backdrops (smoke test)")
     p.add_argument("--allow-ungrounded", action="store_true", help="caption even when context is missing")
     p.add_argument("--dry-run", action="store_true", help="no API call, no files written")
+    p.add_argument("--sync", action="store_true",
+                   help="caption one image at a time, full price, immediate results (default is the "
+                        "Message Batches API: half price, results within 24 h, fetched by --collect)")
+    p.add_argument("--batch-size", type=int, default=10_000, help="max requests per batch (API cap 100,000)")
+    p.add_argument("--batch-max-mb", type=int, default=200, help="max payload per batch in MB (API cap 256)")
+    p.add_argument("--collect", action="store_true",
+                   help="fetch results of submitted batches into state and captions.sql")
+    p.add_argument("--wait", action="store_true", help="with --collect, poll every 60 s until all batches end")
     args = p.parse_args()
 
     if args.model not in PRICES:
