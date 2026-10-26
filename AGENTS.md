@@ -59,13 +59,20 @@ Direct upstream/downstream:
 
 The Windows PC sees the NAS but cannot reach MariaDB (same reason
 `download-images` is split). So this script runs PC-side and never writes the DB
-directly: it emits `captions.sql`, which Philippe loads on the VPS.
+directly: it emits `captions.sql`, loaded on the VPS through the `ssh vps-agent`
+gate, which runs the file inside the VPS against MariaDB.
 
-- **Creating the table and loading captions is DDL/off-whitelist, so voie 2**
-  (Philippe runs it), rule `sql-vps.md`. The caption table is not among the five
-  tables the agent may write via `ssh vps-agent`. Once stable, it could be added.
-- Never hand-build a `docker exec ... mariadb` pipeline. The load command is the
-  three-line `runsqlvaugouindb.sh` form in `README.md` / the design note.
+- **Loading captions/timeline/reviews is voie 1** since 2026-10-26: the two
+  caption tables (`T_WC_TMDB_IMAGE_CAPTION`, `T_WC_TMDB_IMAGE_CAPTION_REVIEW`) are
+  on the agent's write whitelist (`tools/createagentvaugouindb.sh`), and the
+  emitted `.sql` is pure DML, so the agent loads it itself: commit and push, then
+  `ssh vps-agent pull image-captioning` and `ssh vps-agent run image-captioning/<file>.sql`.
+  See *Loading on the VPS* in `README.md`. The gate refuses an uncommitted or
+  modified file in the clone.
+- **Creating or altering the table stays DDL, so voie 2** (Philippe runs
+  `runsqlvaugouindb.sh`), rule `sql-vps.md`. A file that would run over 600 s is
+  voie 2 too.
+- Never hand-build a `docker exec ... mariadb` pipeline.
 
 ## API usage (rule claude-api + credits-api-anthropic)
 
@@ -89,7 +96,8 @@ directly: it emits `captions.sql`, which Philippe loads on the VPS.
   Same guardrail as captions: it orders a gallery, it never dates a scene.
 - **Human reviews** (`review_votes.py`, 2026-10-26): votes exported by an A/B
   comparison page become upserts in `reviews.sql` for
-  `T_WC_TMDB_IMAGE_CAPTION_REVIEW` (DDL in `doc/sql/`, voie 2, not whitelisted).
+  `T_WC_TMDB_IMAGE_CAPTION_REVIEW` (DDL in `doc/sql/`; the table is whitelisted,
+  so the `.sql` loads voie 1 like the captions).
   Rows keep both caption texts, since a losing variant never reaches
   `T_WC_TMDB_IMAGE_CAPTION`. Archive `reviews.sql` once loaded, like `captions.sql`.
 - Run with the repo `.venv`: the global Python's `anthropic` 0.72 rejects
@@ -119,7 +127,7 @@ Avoid editor/terminal operations that rewrite files with mojibake.
 ---
 
 **Last Updated**: 2026-10-26
-**Current Version**: 0.1.8
+**Current Version**: 0.1.9
 
 ## Backlog (Nestor second-brain)
 

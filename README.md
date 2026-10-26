@@ -23,8 +23,11 @@ The PC that sees the NAS cannot reach MariaDB, so:
 1. **Stage 1 (this script, on the Windows PC).** Reads backdrops off the NAS,
    fetches each film's context from the `fastapi-text2sql` API, downsizes the
    image, calls Claude, writes captions to a local SQLite and to a `captions.sql`.
-2. **Stage 2 (on the VPS).** Philippe loads `captions.sql` into the DB (voie 2,
-   rule `sql-vps.md`), after creating the table once from
+2. **Stage 2 (on the VPS).** The agent loads the emitted `.sql` into the DB
+   itself over the `ssh vps-agent` gate (voie 1, rule `sql-vps.md`); see
+   *Loading on the VPS* below. The gate runs the file inside the VPS against
+   MariaDB, so the PC still never connects to the DB directly. Creating or
+   altering the table is DDL, so it stays voie 2 (Philippe runs it), from
    [doc/sql/T_WC_TMDB_IMAGE_CAPTION.sql](doc/sql/T_WC_TMDB_IMAGE_CAPTION.sql).
 
 ## Setup
@@ -97,6 +100,34 @@ NAS, without context, or failed in a batch are retried by the next run, so after
 caption rows accumulate in `captions.sql`; hand that to the VPS when the run
 looks good.
 
+## Loading on the VPS (voie 1)
+
+Since 2026-10-26 the two caption tables (`T_WC_TMDB_IMAGE_CAPTION`,
+`T_WC_TMDB_IMAGE_CAPTION_REVIEW`) are on the agent's MariaDB write whitelist, so
+the agent loads the emitted `.sql` itself, with no manual step. The `.sql` is
+pure DML (`INSERT ... ON DUPLICATE KEY UPDATE`, `UPDATE`), which the gate allows
+on those tables.
+
+**Commit and push the `.sql` first**: the gate refuses a file that is uncommitted
+or modified in the VPS clone. Then, from the PC:
+
+```bash
+ssh vps-agent pull image-captioning
+ssh vps-agent run image-captioning/captions.sql    # -f overwrites today's result, -e stops on first error
+ssh vps-agent run image-captioning/timeline.sql
+ssh vps-agent run image-captioning/reviews.sql      # when review_votes.py wrote one
+```
+
+The gate prints each result after a `===== image-captioning/<file>-YYYYMMDD.txt`
+line; save what follows beside the `.sql` in the local clone (same name), it
+travels with the next commit. The gate then removes its own VPS copy. Writing on
+these tables is still a change to the production DB: state in one line what the
+file will write (tables, expected row count) before running it, and check the
+result after.
+
+Stays voie 2 (Philippe, `runsqlvaugouindb.sh`): the one-time `CREATE TABLE` and
+any `ALTER` (DDL), and any file that would run over 600 s.
+
 ## Timeline (second stage)
 
 `timeline_captions.py` places each captioned still on its film's timeline: one
@@ -106,14 +137,8 @@ minutes, or "not placed" for promotional art and composites. Placed stills get a
 chronological rank. Batch by default; a film is redone only when its caption
 count changed. It writes `timeline.sql` (UPDATEs). The `TIMELINE_*` columns
 exist since 2026-10-25 ([doc/sql/archive/alter-001-timeline.sql](doc/sql/archive/alter-001-timeline.sql));
-each new lot loads captions first, then their timeline:
-
-```bash
-cd ~/docker/image-captioning
-git pull
-~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/captions.sql
-~/docker/tools/runsqlvaugouindb.sh ~/docker/image-captioning/timeline.sql
-```
+each new lot loads captions first, then their timeline (see *Loading on the VPS*
+above: `ssh vps-agent run image-captioning/captions.sql`, then `timeline.sql`).
 
 Once a lot is loaded, `captions.sql`, `timeline.sql` and their dated results go
 to `archive/` (rule archive.md): the scripts append to these files, so an
@@ -133,8 +158,8 @@ Human verdicts on captions go to `T_WC_TMDB_IMAGE_CAPTION_REVIEW`
 one row per image, experiment and reviewer, with the text of the captions judged
 (a losing A/B variant never reaches `T_WC_TMDB_IMAGE_CAPTION`) and a free comment.
 An A/B comparison page exports its votes as JSON; `review_votes.py` joins that
-file with the two state files and appends upserts to `reviews.sql` (voie 2, then
-archive):
+file with the two state files and appends upserts to `reviews.sql` (loaded voie 1
+like the captions, then archived):
 
 ```bash
 python review_votes.py --votes caption-ab-votes.json --experiment ab-context-20261025 \
