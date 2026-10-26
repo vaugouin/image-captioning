@@ -9,7 +9,7 @@ all captions at once keeps the order coherent across the film.
 Batch API by default (half price; the script waits for the batch to end), or
 --sync for immediate calls. A film is re-estimated only when its number of
 captions changed since the last run, since a new still can shift the order.
-Writes UPDATE statements to timeline.sql (voie 2, the TIMELINE_* columns exist since doc/sql/archive/alter-001-timeline.sql).
+Writes UPDATE statements to timeline.sql (voie 1: ssh vps-agent run; the TIMELINE_* columns exist since doc/sql/archive/alter-001-timeline.sql).
 
 The timeline is a guess from captions and plot, good for ordering a gallery;
 it never grounds a claim about when a scene happens.
@@ -238,7 +238,7 @@ def f_run(args) -> int:
 
     dblcost = _cost(args.model, lngin, 0, 0, lngout, 1.0, 1.0 if args.sync else 0.5)
     print(f"\ntokens: in={lngin:,} out={lngout:,}  estimated cost: ${dblcost:.4f}\n"
-          f"SQL appended to {args.out_sql} -> load on the VPS (voie 2), the TIMELINE_* columns exist since doc/sql/archive/alter-001-timeline.sql")
+          f"SQL appended to {args.out_sql} -> load on the VPS (voie 1: commit+push, then ssh vps-agent run); the TIMELINE_* columns exist since doc/sql/archive/alter-001-timeline.sql")
     return 1 if lngfail else 0
 
 

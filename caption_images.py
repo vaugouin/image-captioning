@@ -11,7 +11,8 @@ each backdrop listed in the exported T_WC_TMDB_MOVIE_IMAGE.csv, it:
   4. asks Claude for one anchored caption ("the final duel between the Yojimbo
      and Unosuke", not "two men in a desert"),
   5. records the caption in a resumable SQLite state DB and appends an INSERT
-     to an .sql file that Philippe loads into the DB on the VPS (voie 2).
+     to an .sql file loaded into the DB on the VPS via voie 1 (ssh vps-agent run;
+     the caption tables are whitelisted since 2026-10-26).
 
 The caption only ranks the image for retrieval; it never grounds a claim.
 
@@ -370,7 +371,7 @@ class State:
 
 
 # ---------------------------------------------------------------------------
-# SQL emit (loaded on the VPS, voie 2)
+# SQL emit (loaded on the VPS, voie 1: ssh vps-agent run)
 # ---------------------------------------------------------------------------
 
 def _sql_escape(strvalue: str) -> str:
@@ -564,7 +565,7 @@ def f_collect_batches(args) -> int:
         print(
             f"tokens: in={lngin:,} cache_read={lngcacheread:,} cache_write={lngcachewrite:,} out={lngout:,}\n"
             f"estimated cost (Batch API, 1 h cache): ${dblcost:.4f}  = {100 * dblcost / lngdone:.3f} cents/image\n"
-            f"SQL appended to {pathsql} -> load on the VPS (voie 2)"
+            f"SQL appended to {pathsql} -> load on the VPS (voie 1: commit+push, then ssh vps-agent run)"
         )
     return 1 if lngfail else 0
 
@@ -676,7 +677,7 @@ def f_run(args) -> int:
             f"tokens: in={lngin:,} cache_read={lngcacheread:,} cache_write={lngcachewrite:,} out={lngout:,}\n"
             f"estimated cost (sync, this run): ${dblcost:.4f}  = {100 * dblcost / lngdone:.3f} cents/image"
             "  (the default batch mode would halve it)\n"
-            f"SQL written to {pathsql} -> load on the VPS (voie 2)"
+            f"SQL written to {pathsql} -> load on the VPS (voie 1: commit+push, then ssh vps-agent run)"
         )
     return 1 if lngfail else 0
 

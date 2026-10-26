@@ -6,7 +6,7 @@ the reviewer's votes in the browser and exports them as JSON:
 This script joins that file with both state files (for the captions, image paths
 and model) and writes one upsert per judged image into reviews.sql, for
 T_WC_TMDB_IMAGE_CAPTION_REVIEW (doc/sql/T_WC_TMDB_IMAGE_CAPTION_REVIEW.sql).
-Load it on the VPS by voie 2, then archive it (rule archive.md).
+Load it on the VPS by voie 1 (ssh vps-agent run), then archive it (rule archive.md).
 
 A comment without a vote is skipped and reported, since VERDICT is mandatory.
 
