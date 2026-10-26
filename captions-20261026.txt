@@ -1,0 +1,3 @@
+-- captions.sql
+-- run on vaugouindb (container damp-vaugouin-com-mariadb-1) at 2026-10-26 20:07:10 +0100
+--
