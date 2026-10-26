@@ -518,6 +518,7 @@ def f_collect_batches(args) -> int:
     fpsql = pathsql.open("a", encoding="utf-8")
     lngdone = lngfail = 0
     lngin = lngout = lngcacheread = lngcachewrite = 0
+    dblcost = 0.0  # priced per row with the model it was submitted with, not --model
     try:
         while True:
             lngopen = 0
@@ -544,6 +545,8 @@ def f_collect_batches(args) -> int:
                             lngout += cap.output_tokens
                             lngcacheread += cap.cache_read_tokens
                             lngcachewrite += cap.cache_write_tokens
+                            dblcost += _cost(strmodel, cap.input_tokens, cap.cache_read_tokens,
+                                             cap.cache_write_tokens, cap.output_tokens, 2.0, 0.5)
                             lngdone += 1
                             continue
                     print(f"  ! batch {strbatch} row {lngrow}: {result.result.type}")
@@ -561,7 +564,6 @@ def f_collect_batches(args) -> int:
 
     print(f"\nsummary: {lngdone} captions collected, {lngfail} failed (resubmitted by the next submission)")
     if lngdone:
-        dblcost = _cost(args.model, lngin, lngcacheread, lngcachewrite, lngout, 2.0, 0.5)
         print(
             f"tokens: in={lngin:,} cache_read={lngcacheread:,} cache_write={lngcachewrite:,} out={lngout:,}\n"
             f"estimated cost (Batch API, 1 h cache): ${dblcost:.4f}  = {100 * dblcost / lngdone:.3f} cents/image\n"
