@@ -118,7 +118,9 @@ git pull
 Once a lot is loaded, `captions.sql`, `timeline.sql` and their dated results go
 to `archive/` (rule archive.md): the scripts append to these files, so an
 archived pair means the next run starts empty and the next load carries only
-the new rows. The first lot (8 corpus films, 342 captions) is in `archive/`.
+the new rows. The first lot (8 corpus films, 342 captions) is in `archive/`;
+later lots take a suffix there (`captions-lot2.sql`: 6 Criterion films seen on
+Plex, 107 captions, loaded 2026-10-26).
 
 Measured: ~$0.03 per film in sync (A Fistful of Dollars, 61 stills), half in batch.
 The interval width carries the model's uncertainty; it orders a gallery, it does
