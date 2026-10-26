@@ -1,0 +1,4 @@
+Warning: the run produced no result at all. Does timeline.sql hold anything but comments and DDL?
+-- timeline.sql
+-- run on vaugouindb (container damp-vaugouin-com-mariadb-1) at 2026-10-26 22:13:35 +0100
+--

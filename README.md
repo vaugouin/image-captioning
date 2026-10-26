@@ -148,7 +148,8 @@ later lots take a suffix there (`captions-lot2.sql`: 6 Criterion films seen on
 Plex, 107 captions, loaded 2026-10-26; lot3: Criterion tranches 1-2, 11,996
 captions; lot4: Criterion tranche 4 plus stills of earlier films that
 download-images had just fetched, 7,429 captions, 279 films, $14.64 captions +
-$2.45 timeline). After lot4: 19,874 Sonnet captions, 620 films.
+$2.45 timeline; lot5: tranche 5, 597 captions, 33 films, $1.34 with timeline).
+After lot5: 20,471 Sonnet captions, 652 films, all with a timeline.
 
 Measured: ~$0.03 per film in sync (A Fistful of Dollars, 61 stills), half in batch.
 The interval width carries the model's uncertainty; it orders a gallery, it does
