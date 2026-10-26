@@ -124,6 +124,25 @@ Measured: ~$0.03 per film in sync (A Fistful of Dollars, 61 stills), half in bat
 The interval width carries the model's uncertainty; it orders a gallery, it does
 not date a scene.
 
+## Human reviews
+
+Human verdicts on captions go to `T_WC_TMDB_IMAGE_CAPTION_REVIEW`
+([doc/sql/T_WC_TMDB_IMAGE_CAPTION_REVIEW.sql](doc/sql/T_WC_TMDB_IMAGE_CAPTION_REVIEW.sql)):
+one row per image, experiment and reviewer, with the text of the captions judged
+(a losing A/B variant never reaches `T_WC_TMDB_IMAGE_CAPTION`) and a free comment.
+An A/B comparison page exports its votes as JSON; `review_votes.py` joins that
+file with the two state files and appends upserts to `reviews.sql` (voie 2, then
+archive):
+
+```bash
+python review_votes.py --votes caption-ab-votes.json --experiment ab-context-20261025 \
+    --state-a state-A.sqlite --label-a "full: 25 cast lines, whole plot" \
+    --state-b state-B.sqlite --label-b "light: 15 cast lines, plot <= 2,000 chars"
+```
+
+First experiment, `ab-context-20261025` (6 films, 107 stills): A better 13,
+B better 2, equal 90, both wrong 2 (a character not recognised by either).
+
 ## Model and cost
 
 | Model | ~ / image (Batch) | 401 backdrops | all TMDb backdrops (1.64M) |

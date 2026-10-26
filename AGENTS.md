@@ -87,6 +87,11 @@ directly: it emits `captions.sql`, which Philippe loads on the VPS.
   `timeline.sql` (UPDATEs on the `TIMELINE_*` columns from
   `doc/sql/archive/alter-001-timeline.sql`, applied 2026-10-25). Read by tmdb-front `movie-captions.php`.
   Same guardrail as captions: it orders a gallery, it never dates a scene.
+- **Human reviews** (`review_votes.py`, 2026-10-26): votes exported by an A/B
+  comparison page become upserts in `reviews.sql` for
+  `T_WC_TMDB_IMAGE_CAPTION_REVIEW` (DDL in `doc/sql/`, voie 2, not whitelisted).
+  Rows keep both caption texts, since a losing variant never reaches
+  `T_WC_TMDB_IMAGE_CAPTION`. Archive `reviews.sql` once loaded, like `captions.sql`.
 - Run with the repo `.venv`: the global Python's `anthropic` 0.72 rejects
   `output_config` (TypeError before any request, so nothing billed).
 
@@ -113,8 +118,8 @@ Avoid editor/terminal operations that rewrite files with mojibake.
 
 ---
 
-**Last Updated**: 2026-10-25
-**Current Version**: 0.1.4
+**Last Updated**: 2026-10-26
+**Current Version**: 0.1.5
 
 ## Backlog (Nestor second-brain)
 
