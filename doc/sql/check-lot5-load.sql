@@ -1,0 +1,13 @@
+-- Contrôle du chargement du lot 5 (tranche 5 Criterion, fin du crédit promotionnel
+-- d'octobre). SELECT seulement : voie 1 (ssh vps-agent run).
+-- Attendu : 597 captions créées, 33 films, chronologie posée sur toutes.
+
+SELECT COUNT(*) AS CREATED, COUNT(DISTINCT ID_ENTITY) AS FILMS,
+       SUM(TIMELINE_START_MIN IS NOT NULL) AS PLACED, SUM(TIMELINE_MODEL IS NULL) AS NO_TIMELINE
+FROM T_WC_TMDB_IMAGE_CAPTION
+WHERE TABLE_SOURCE = 'movie' AND TIM_CREATED >= '2026-10-26 20:10:00';
+
+SELECT CAPTION_MODEL, COUNT(*) AS ALL_CAPTIONS, COUNT(DISTINCT ID_ENTITY) AS FILMS,
+       SUM(TIMELINE_MODEL IS NULL) AS NO_TIMELINE
+FROM T_WC_TMDB_IMAGE_CAPTION WHERE TABLE_SOURCE = 'movie'
+GROUP BY CAPTION_MODEL;
