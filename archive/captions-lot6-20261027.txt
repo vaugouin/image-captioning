@@ -1,0 +1,4 @@
+-- captions.sql
+-- run on vaugouindb (container damp-vaugouin-com-mariadb-1) at 2026-10-27 08:00:41 +0100
+--
+Warning: the run produced no result at all. Does captions.sql hold anything but comments and DDL?
