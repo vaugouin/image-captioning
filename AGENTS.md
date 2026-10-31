@@ -1,138 +1,72 @@
 # AGENTS.md - Agent Guide for image-captioning
 
-This file gives you the agentic context to work on this repo safely. For project
-overview, install, run and cost material, read @README.md - it is canonical and
-not duplicated here.
+Agent rules only. Overview, setup, run commands, VPS loading, timeline, reviews
+and costs: @README.md (canonical). Reference DDL in `doc/sql/` is read-only
+unless the user asks for schema-doc edits. Keep `README.md` aligned with any
+behaviour change.
 
-Single canonical guide for coding agents here. @CLAUDE.md and any future
-tool-specific guide (`GEMINI.md`, ...) only point here.
+## Role in Agent BBB
 
-Deeper specs live in their own files:
-- @doc/sql/T_WC_TMDB_IMAGE_CAPTION.sql - reference DDL for the caption table;
-  treat as read-only unless the user explicitly asks for schema-doc edits.
-
-Keep documentation aligned on any change: `README.md` for user-facing behaviour,
-this file only when agent workflow or safety context changes.
-
----
-
-## Related repositories (project ecosystem)
-
-`image-captioning` is one stage of **Agent BBB**, a multi-repo movie/TV database
-system owned by GitHub user `vaugouin`. Sibling repos live under
-`%USERPROFILE%/Code/<repo>` and at `github.com/vaugouin/<repo>`, converging on a
-shared MariaDB (`T_WC_*`) and a ChromaDB vector store. Canonical roster:
+Reads the TMDb backdrops `download-images` mirrored onto the NAS, captions them
+with a Claude vision model grounded in `fastapi-text2sql` `GET /movies/{id}`,
+and writes `T_WC_TMDB_IMAGE_CAPTION`; `embedding-update` embeds the captions
+next (APP-IDEAS-010). The NAS path layout and resumable-SQLite pattern are
+copied from download-images, not imported. Repo roster:
 `%USERPROFILE%/Nestor/projets/t2s-backlog/topics/related-repositories.txt`.
-
-**This repo's role:** Asset enrichment. It reads the TMDb backdrop images that
-`download-images` mirrored onto the NAS, asks a Claude vision model for one
-anchored caption per image grounded in the film's data (from the
-`fastapi-text2sql` API), and writes the captions back to the DB in a new table
-`T_WC_TMDB_IMAGE_CAPTION`. Those captions are then embedded into ChromaDB by
-`embedding-update` so a generated podcast episode (APP-IDEAS-010, in `voice-agent`)
-can retrieve the right image for a given line.
-
-Direct upstream/downstream:
-- **download-images** - mirrors the images this repo reads; shares the sharded
-  NAS path layout and the resumable-SQLite pattern (copied, not imported).
-- **fastapi-text2sql** - `GET /movies/{id}` supplies the per-film grounding context.
-- **embedding-update** - embeds the captions into ChromaDB (next stage, not here).
-
----
 
 ## The captioning contract (read before changing the prompt)
 
-- **A caption ranks, it never grounds.** It exists to retrieve the image by
-  meaning. The vision model can misread a scene; that is acceptable for picking
-  an ambience shot and unacceptable for a verifiable statement, which always
-  comes from the DB. Do not let captions feed claims.
-- **Anchored, not generic.** "the final duel between the Yojimbo and Unosuke",
-  not "two men in a desert". The anchor comes from the FILM CONTEXT block passed
-  with every image; without context the script skips the film unless
-  `--allow-ungrounded` is set.
-- **One film = one cached prefix.** The context block carries `cache_control`;
-  all backdrops of a film reuse it. Keep the context block first and byte-stable
-  across a film's images, or cache hits vanish (check
+- **A caption ranks, it never grounds.** It retrieves an image by meaning;
+  verifiable statements always come from the DB. Do not let captions feed claims.
+- **Anchored, not generic**: the anchor comes from the FILM CONTEXT block; a film
+  without context is skipped unless `--allow-ungrounded`.
+- **One film = one cached prefix.** Keep the context block first and
+  byte-stable across a film's images, or cache hits vanish (check
   `usage.cache_read_input_tokens`).
+- The timeline orders a gallery, it never dates a scene.
 
-## Two-stage topology (hard constraint)
+## DB writes (hard constraint)
 
-The Windows PC sees the NAS but cannot reach MariaDB (same reason
-`download-images` is split). So this script runs PC-side and never writes the DB
-directly: it emits `captions.sql`, loaded on the VPS through the `ssh vps-agent`
-gate, which runs the file inside the VPS against MariaDB.
+The PC sees the NAS but not MariaDB: scripts only emit `.sql` files
+(`captions.sql`, `timeline.sql`, `reviews.sql`). Loading them is voie 1 (both
+caption tables are on the agent whitelist): commit and push first, then the
+`ssh vps-agent` gate, see README § Loading on the VPS. DDL and files over 600 s
+are voie 2 (rule `sql-vps.md`). Never hand-build a `docker exec ... mariadb`
+pipeline. Archive each `.sql` with its dated result once loaded (README §
+Timeline): the scripts append to these files.
 
-- **Loading captions/timeline/reviews is voie 1** since 2026-10-26: the two
-  caption tables (`T_WC_TMDB_IMAGE_CAPTION`, `T_WC_TMDB_IMAGE_CAPTION_REVIEW`) are
-  on the agent's write whitelist (`tools/createagentvaugouindb.sh`), and the
-  emitted `.sql` is pure DML, so the agent loads it itself: commit and push, then
-  `ssh vps-agent pull image-captioning` and `ssh vps-agent run image-captioning/<file>.sql`.
-  See *Loading on the VPS* in `README.md`. The gate refuses an uncommitted or
-  modified file in the clone.
-- **Creating or altering the table stays DDL, so voie 2** (Philippe runs
-  `runsqlvaugouindb.sh`), rule `sql-vps.md`. A file that would run over 600 s is
-  voie 2 too.
-- Never hand-build a `docker exec ... mariadb` pipeline.
+## API usage and cost
 
-## API usage (rule claude-api + credits-api-anthropic)
-
-- Model via `anthropic` official SDK, `client.messages.create`. Default
-  `claude-sonnet-5-5`. **Do not pass `temperature`/`top_p`** (400 on current
-  models). Thinking is left adaptive; depth is controlled by
-  `output_config.effort` (`low` for captioning). `budget_tokens` is removed.
-- Use an API key from **Philippe's Individual Org** so calls draw on the Max
-  plan's monthly API credit (100 USD, not carried over). Do not assume a repo's
-  `ANTHROPIC_API_KEY` is from that org; have it checked before counting on the credit.
-- **Every run spends real money.** Smoke-test with `--dry-run`, then `--limit`
-  on one film, before a full pass. The script prints a measured cost estimate.
-- **Batch API is the default mode** (Philippe, 2026-10-25): a run submits Message
-  Batches, `--collect` fetches them; `--sync` is the full-price opt-in. Rows in a
-  submitted batch are `status='submitted'` with their `batch_id` in state; never
-  resubmit them by hand, or the same images are paid twice.
-- **Timeline stage** (`timeline_captions.py`, 2026-10-25): one text request per
-  film places its captions on the film's timeline (JSON schema output), writes
-  `timeline.sql` (UPDATEs on the `TIMELINE_*` columns from
-  `doc/sql/archive/alter-001-timeline.sql`, applied 2026-10-25). Read by tmdb-front `movie-captions.php`.
-  Same guardrail as captions: it orders a gallery, it never dates a scene.
-- **Human reviews** (`review_votes.py`, 2026-10-26): votes exported by an A/B
-  comparison page become upserts in `reviews.sql` for
-  `T_WC_TMDB_IMAGE_CAPTION_REVIEW` (DDL in `doc/sql/`; the table is whitelisted,
-  so the `.sql` loads voie 1 like the captions).
-  Rows keep both caption texts, since a losing variant never reaches
-  `T_WC_TMDB_IMAGE_CAPTION`. Archive `reviews.sql` once loaded, like `captions.sql`.
-- Run with the repo `.venv`: the global Python's `anthropic` 0.72 rejects
-  `output_config` (TypeError before any request, so nothing billed).
-
----
+- `anthropic` SDK, default `claude-sonnet-5-5`. Never pass `temperature`/`top_p`
+  (400); depth via `output_config.effort`, no `budget_tokens`.
+- Run with the repo `.venv`: the global `anthropic` 0.72 rejects `output_config`.
+- Key from **Philippe's Individual Org** (Max plan credit); do not assume the
+  repo's `ANTHROPIC_API_KEY` is from it, have it checked.
+- **Every run spends real money**: `--dry-run`, then `--limit` on one film,
+  before a full pass.
+- Batch is the default. Rows with `status='submitted'` and a `batch_id` are in
+  flight: never resubmit them by hand, or the images are paid twice.
 
 ## Code conventions
 
-Match the sibling repos (Hungarian notation, legacy style):
-- `str` strings, `lng` integers, `dbl` floats, `arr` lists, `int` boolean-like flags.
-- Public pipeline entry points `f_*`; private helpers `_*`. Google-style docstrings.
-- Broad try/except with console logging on the API loop; a failed image is
-  recorded and skipped, never fatal.
+Match the sibling repos (Hungarian notation, legacy style): `str`, `lng`, `dbl`,
+`arr`, `int` (boolean-like) prefixes; entry points `f_*`, private helpers `_*`;
+Google-style docstrings. A failed image is logged and skipped, never fatal.
 
-## SQL object naming
+SQL naming: UPPERCASE snake_case; tables `T_WC_*` (`T_WC_TMDB_*` for TMDb
+source); PK `ID_{ENTITY}` or surrogate `ID_*`; `UK_*`, `IDX_*`; FKs reuse the
+referenced PK name; timestamps `TIM_*`; media paths `*_PATH`.
 
-UPPERCASE snake_case; persistent tables `T_WC_*`, TMDb source/reference `T_WC_TMDB_*`;
-PK `ID_{ENTITY}` or a surrogate `ID_*`; unique keys `UK_*`, indexes `IDX_*`,
-foreign keys reuse the referenced PK name; timestamps `TIM_*`; media paths `*_PATH`.
-
-## Encoding
-
-UTF-8 everywhere (Markdown, SQL, captions carry non-ASCII titles and names).
-Avoid editor/terminal operations that rewrite files with mojibake.
+UTF-8 everywhere (captions carry non-ASCII names); avoid tools that rewrite
+files with mojibake.
 
 ---
 
-**Last Updated**: 2026-10-26
-**Current Version**: 0.1.18
+**Last Updated**: 2026-10-31
+**Current Version**: 0.1.19
 
 ## Backlog (Nestor second-brain)
 
-- Design note: `%USERPROFILE%/Nestor/projets/t2s-backlog/app-ideas-010-image-captioning.md`
-- Parent dossier: `%USERPROFILE%/Nestor/projets/t2s-backlog/app-ideas-010-generated-podcast-video.md`
-- Cross-repo dashboard: `%USERPROFILE%/Nestor/projets/t2s-backlog/index.md`
-
-These are local PC paths; they do not resolve on the VPS or on cloud agents.
+Design note `%USERPROFILE%/Nestor/projets/t2s-backlog/app-ideas-010-image-captioning.md`,
+parent `app-ideas-010-generated-podcast-video.md`, dashboard `index.md` (same
+folder). Local PC paths, not on the VPS or cloud agents.

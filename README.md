@@ -135,7 +135,9 @@ text request per film holding the context (runtime, plot, cast) and all of the
 film's captions, answered as JSON (schema-enforced): a start-end interval in
 minutes, or "not placed" for promotional art and composites. Placed stills get a
 chronological rank. Batch by default; a film is redone only when its caption
-count changed. It writes `timeline.sql` (UPDATEs). The `TIMELINE_*` columns
+count changed. It writes `timeline.sql` (UPDATEs).
+Run it with `python timeline_captions.py --movie-ids <ids>` (`--sync`, `--dry-run`,
+`--force` to redo films whose captions did not change). The `TIMELINE_*` columns
 exist since 2026-10-25 ([doc/sql/archive/alter-001-timeline.sql](doc/sql/archive/alter-001-timeline.sql));
 each new lot loads captions first, then their timeline (see *Loading on the VPS*
 above: `ssh vps-agent run image-captioning/captions.sql`, then `timeline.sql`).
