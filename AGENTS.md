@@ -1,5 +1,9 @@
 # AGENTS.md - Agent Guide for image-captioning
 
+## Canary
+
+Start every reply with "Philippe,": no exceptions, including short replies and tool summaries.
+
 Agent rules only. Overview, setup, run commands, VPS loading, timeline, reviews
 and costs: @README.md (canonical). Reference DDL in `doc/sql/` is read-only
 unless the user asks for schema-doc edits. Keep `README.md` aligned with any
@@ -63,7 +67,7 @@ files with mojibake.
 ---
 
 **Last Updated**: 2026-10-31
-**Current Version**: 0.1.19
+**Current Version**: 0.1.20
 
 ## Backlog (Nestor second-brain)
 
