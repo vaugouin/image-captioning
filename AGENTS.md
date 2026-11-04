@@ -67,7 +67,7 @@ files with mojibake.
 ---
 
 **Last Updated**: 2026-10-31
-**Current Version**: 0.1.20
+**Current Version**: 0.1.21
 
 ## Backlog (Nestor second-brain)
 
